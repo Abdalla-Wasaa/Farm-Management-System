@@ -329,6 +329,7 @@ export function ProductDetail() {
 const checkoutSchema = z
   .object({
     fulfillment: z.enum(["pickup", "delivery"]),
+    payment: z.enum(["cash", "mpesa"]),
     address: z.string().max(500),
   })
   .superRefine((v, c) => {
@@ -348,19 +349,22 @@ export function Checkout() {
   const [error, setError] = useState("");
   const form = useForm<z.infer<typeof checkoutSchema>>({
     resolver: zodResolver(checkoutSchema),
-    defaultValues: JSON.parse(
-      sessionStorage.getItem("kuku.checkout") ||
-        '{"fulfillment":"pickup","address":""}',
-    ),
+    defaultValues: {
+      fulfillment: "pickup",
+      address: "",
+      payment: "cash",
+      ...JSON.parse(sessionStorage.getItem("kuku.checkout") || "{}"),
+    },
   });
   const fulfillment = form.watch("fulfillment");
   const address = form.watch("address");
+  const payment = form.watch("payment");
   useEffect(() => {
     sessionStorage.setItem(
       "kuku.checkout",
-      JSON.stringify({ fulfillment, address }),
+      JSON.stringify({ fulfillment, address, payment }),
     );
-  }, [fulfillment, address]);
+  }, [fulfillment, address, payment]);
   const rows = cart.items.map((i) => ({
     item: i,
     product: products.data?.find((p) => p.id === i.product_id),
@@ -391,10 +395,17 @@ export function Checkout() {
     cart.clear();
     sessionStorage.removeItem("kuku.checkout");
     queryClient.invalidateQueries();
-    navigate(`/orders/${order.id}`);
+    navigate(
+      `/orders/${order.id}${payment === "mpesa" ? "?payment=mpesa#mpesa-payment" : ""}`,
+    );
   };
   const mutation = useMutation({
     mutationFn: async (values: z.infer<typeof checkoutSchema>) => {
+      if (values.payment === "mpesa" && !config.data?.mpesa_ready)
+        throw new ApiError(
+          503,
+          "M-Pesa sandbox requires a configured public HTTPS callback URL.",
+        );
       if (invalid)
         throw new ApiError(
           422,
@@ -537,6 +548,41 @@ export function Checkout() {
                     </label>
                   </div>
                 </fieldset>
+                <fieldset>
+                  <legend>Payment option</legend>
+                  <div className="fulfillment-options payment-options">
+                    <label className={payment === "cash" ? "selected" : ""}>
+                      <input
+                        type="radio"
+                        value="cash"
+                        {...form.register("payment")}
+                      />
+                      Cash on handover
+                    </label>
+                    <label className={payment === "mpesa" ? "selected" : ""}>
+                      <input
+                        type="radio"
+                        value="mpesa"
+                        {...form.register("payment")}
+                        disabled={!config.data?.mpesa_ready}
+                      />
+                      M-Pesa STK (sandbox)
+                    </label>
+                  </div>
+                  {!config.data?.mpesa_ready && (
+                    <small>
+                      M-Pesa is unavailable until the backend has a valid public
+                      HTTPS callback configuration.
+                    </small>
+                  )}
+                  {payment === "mpesa" && (
+                    <p className="muted">
+                      Place your order first, then confirm the phone number and
+                      request the STK prompt on the next screen. No prompt is
+                      sent automatically.
+                    </p>
+                  )}
+                </fieldset>
                 {fulfillment === "delivery" && (
                   <div className="field">
                     <label htmlFor="address">Delivery address</label>
@@ -564,7 +610,9 @@ export function Checkout() {
                   {user
                     ? `Order updates: ${user.phone}`
                     : "Sign in as a buyer to continue."}{" "}
-                  Payment is collected after pickup or delivery completion.
+                  {payment === "cash"
+                    ? "Cash is recorded after pickup or delivery completion."
+                    : "M-Pesa sandbox can be requested as soon as your order is placed. Sandbox success is not real money."}
                 </p>
                 {error && (
                   <Alert>
@@ -599,7 +647,11 @@ export function Checkout() {
                     className="button full"
                     disabled={mutation.isPending || invalid || !config.data}
                   >
-                    {mutation.isPending ? "Placing order…" : "Place order"}
+                    {mutation.isPending
+                      ? "Placing order…"
+                      : payment === "mpesa"
+                        ? "Place order & continue to M-Pesa"
+                        : "Place order"}
                     <ArrowRight size={18} />
                   </button>
                 ) : (

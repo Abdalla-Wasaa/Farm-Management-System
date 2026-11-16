@@ -465,3 +465,88 @@ test("M-Pesa provider failure stays unpaid and offers an explicit retry", async 
   ).toBeVisible();
   await expect(page.locator(".status-strip")).toContainText("Unpaid");
 });
+
+test("checkout offers STK before handover without automatically sending a prompt", async ({
+  browser,
+  request,
+}) => {
+  const a = accounts();
+  const sellerHeaders = await auth(request, "seller");
+  const buyerHeaders = await auth(request, "buyer");
+  const productResponse = await request.post(backend + "/products", {
+    headers: sellerHeaders,
+    data: {
+      business_id: a.business_id,
+      name: "Prepaid eggs",
+      description: "Pay before collection",
+      category: "eggs",
+      unit: "tray",
+      price: "450.00",
+    },
+  });
+  expect(productResponse.ok()).toBeTruthy();
+  const product = await productResponse.json();
+  await request.post(`${backend}/products/${product.id}/stock`, {
+    headers: sellerHeaders,
+    data: { quantity: "2", source: "prepayment-opening" },
+  });
+  const buyer = await browser.newPage();
+  await login(buyer, "buyer");
+  await buyer.goto(`/products/${product.id}`);
+  await buyer.getByRole("button", { name: "Add to basket" }).click();
+  await buyer.goto("/cart");
+  await buyer.getByLabel("M-Pesa STK (sandbox)", { exact: true }).check();
+  await expect(
+    buyer.getByText("No prompt is sent automatically.", { exact: false }),
+  ).toBeVisible();
+  await buyer
+    .getByRole("button", {
+      name: "Place order & continue to M-Pesa",
+      exact: true,
+    })
+    .click();
+  await expect(buyer).toHaveURL(/orders\/\d+\?payment=mpesa/);
+  const oid = new URL(buyer.url()).pathname.split("/").at(-1)!;
+  await expect(buyer.locator(".status-strip")).toContainText("Pending");
+  await expect(buyer.locator(".status-strip")).toContainText("Unpaid");
+  const before = await request.get(`${backend}/orders/${oid}/payments/mpesa`, {
+    headers: buyerHeaders,
+  });
+  expect(await before.json()).toEqual([]);
+  await buyer.getByRole("button", { name: "Request sandbox payment" }).click();
+  await expect(buyer.locator(".payment-intent")).toContainText("Queued");
+  await expect(
+    buyer.getByRole("button", { name: "Cancel order", exact: true }),
+  ).toHaveCount(0);
+  paymentStep("accepted");
+  paymentStep("success");
+  await buyer
+    .getByRole("button", { name: "Refresh status", exact: true })
+    .click();
+  await expect(buyer.locator(".status-strip")).toContainText("Paid");
+  await expect(buyer.locator(".status-strip")).toContainText("Pending");
+  const seller = await browser.newPage();
+  await login(seller, "seller");
+  await seller.goto(`/orders/${oid}`);
+  for (const step of ["confirmed", "preparing", "ready"])
+    await seller
+      .getByRole("button", { name: `Mark ${step}`, exact: true })
+      .click();
+  await seller
+    .getByRole("button", { name: "Complete pickup", exact: true })
+    .click();
+  await confirm(seller);
+  await expect(
+    seller.getByRole("button", { name: "Record cash payment" }),
+  ).toHaveCount(0);
+  await buyer.reload();
+  await expect(buyer.locator(".status-strip")).toContainText("Completed");
+  await expect(buyer.locator(".status-strip")).toContainText("Paid");
+  const stock = await (
+    await request.get(`${backend}/products/${product.id}`)
+  ).json();
+  expect(Number(stock.stock)).toBe(1);
+  expect(Number(stock.reserved)).toBe(0);
+  await buyer.close();
+  await seller.close();
+});

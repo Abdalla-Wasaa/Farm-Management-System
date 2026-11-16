@@ -31,7 +31,8 @@ Privileged accounts are created by an admin at `POST /admin/users`, never public
 
 All prices are KES decimals; only kilogram quantities may be fractional. One seller per order.
 Send a unique `Idempotency-Key` on order creation and reuse it on network retries.
-Stock is reserved on order placement; pending reservations expire after 60 minutes by default.
+Stock is reserved on order placement; unpaid pending reservations expire after 60 minutes by default,
+except while an STK request is active or uncertain. Verified paid orders retain their reservation until handover.
 Confirmation accepts the reservation; confirmed orders do not auto-expire. Cancellation before
 handover releases stock. Sale consumes stock at dispatch or pickup completion.
 Transitions: pending → confirmed → preparing → ready → completed (pickup), or ready → dispatched
@@ -150,7 +151,7 @@ Use the API's actual host port (`API_PORT`, default 8000, currently 8001 in this
 Do not expose a development server containing real customer data. If the tunnel URL changes,
 update `.env` and recreate the API/worker. No callback URL is invented or hardcoded.
 
-After a pickup/delivery order is **completed and unpaid**, the buyer can request payment:
+After placing an **open, unpaid order**, the buyer can request sandbox payment before or after handover:
 
 ```http
 POST /orders/ORDER_ID/payments/mpesa
@@ -163,7 +164,8 @@ Content-Type: application/json
 
 Use a phone number you control or a provider-approved test number. The server takes the exact total
 from the order; STK requires a whole KES amount, so fractional totals are rejected, never rounded.
-This increment supports payment at handover, not advance payment. The response is HTTP 202 with
+M-Pesa sandbox supports payment immediately after order creation. Cash recording remains after
+handover only. Expired/cancelled orders cannot start payment. The response is HTTP 202 with
 an intent ID and `environment: sandbox`. The existing worker submits the request and polls its
 status. `GET /orders/ORDER_ID/payments/mpesa` shows progress to authorized order viewers.
 
@@ -180,7 +182,7 @@ cash collection is blocked while a request is unresolved. A confirmed failed att
 key. Transport ambiguity or a worker crash during submission becomes `uncertain` instead of
 repeating a potentially accepted STK prompt. Unresolved status queries back off, up to 20 checks,
 then require investigation. Automated reconciliation of ambiguous submissions, manual resolution,
-refunds, prepayment, real receipt reconciliation, and live onboarding are not implemented.
+refunds, real receipt reconciliation, and live onboarding are not implemented.
 
 Protocol reference: https://github.com/safaricom/mpesa-php-sdk/blob/master/src/Mpesa.php
 
@@ -213,7 +215,7 @@ routes. The provided nginx configuration handles this in Docker.
 For the complete persistent local stack (requires Docker Hub access):
 
 ```sh
-docker compose --profile frontend up --build -d
+docker compose up --build -d
 ```
 
 The frontend is served on port 5173 (`FRONTEND_PORT`), with the API URL compiled from
@@ -239,7 +241,9 @@ refresh-token or account-phone editing endpoint, so the UI does not pretend to o
    adjustments cannot remove reserved stock. Farm output should use production transfers.
 3. **Buyer:** register with a Kenyan mobile number and password, browse **Marketplace**,
    open a product and add a selling quantity. A basket accepts only one seller. Choose
-   pickup or delivery, enter the delivery address, and review KES totals. Order updates use
+   pickup or delivery, enter the delivery address, review KES totals, and select cash or M-Pesa STK
+   (sandbox). Choosing M-Pesa continues to the order’s phone/payment form; a prompt is sent only
+   when the buyer explicitly clicks **Request sandbox payment**. Order updates use
    the buyer's registered phone; checkout does not submit an unsupported contact-number field.
 4. **Buyer checkout:** place the order once. Buttons disable during submission. If the
    response is lost, use **Recover saved submission** or inspect order history. Recovery
@@ -256,11 +260,13 @@ refresh-token or account-phone editing endpoint, so the UI does not pretend to o
    record physically received cash using a unique receipt reference. The buyer then sees
    the completed order, delivered status and paid status. Active/unresolved M-Pesa intents
    block cash recording to prevent a second collection.
-9. **M-Pesa sandbox:** the action is shown only for a completed unpaid order when the server
+9. **M-Pesa sandbox:** the action is available for an open unpaid order when the server
    reports sandbox callback configuration ready. An accepted request stays unpaid until the
    worker independently verifies it. UI polling stops after two minutes and on navigation;
    **Refresh status** checks again without creating another prompt. A confirmed cancellation
    or failure permits a new request; an uncertain outcome requires administrator investigation.
+   Paid and active/uncertain STK orders cannot be cancelled or automatically expire, preventing stock
+   release while a payment might succeed. Failed requests resume normal cancellation/expiry.
    Sandbox payments are labelled simulations. No live mode is supported.
 10. **Farm staff:** create a broiler/layer batch, then record daily mortality, eggs and feed.
     Recording production does not add marketplace stock. Under **Transfer to inventory**,
@@ -309,12 +315,36 @@ They are not evidence of real callback connectivity. Traces/screenshots are igno
 artifacts and can contain generated test account details.
 
 For an actual manual Daraja test, separately configure the public HTTPS callback as described
-above, use a number you control, complete an unpaid order, and explicitly request a sandbox
+above, use a number you control, place an unpaid order, and explicitly request a sandbox
 payment. Do not run this step unattended. No real STK request or live SMS is sent by the
 frontend build, backend tests, browser tests, or account seed scripts.
 
-Local verification passed 42 backend tests and 7 Playwright scenarios. The frontend production
+Local verification passed 46 backend tests and 8 Playwright scenarios. The frontend production
 build also passed TypeScript checking and was checked for configured backend/provider secrets.
 The frontend Docker image also built successfully after a transient Docker Hub DNS issue
 cleared. The nginx frontend now serves port 5173, including direct links to application routes.
 Existing backend containers continue running on port 8001.
+
+
+### Recovering the local application
+
+From the repository directory, start all four long-running services (no frontend profile required):
+
+```sh
+docker compose up -d
+# After changing code:
+COMPOSE_BAKE=false docker compose up --build -d
+docker compose ps
+```
+
+Open http://localhost:5173 (or http://127.0.0.1:5173). API health is
+http://localhost:8001/health. A container marked `Created` is not yet running; let Compose finish
+its migrations and health checks. API, worker, database and frontend use `unless-stopped` restart
+policies. The frontend waits for API health before initial startup. Existing volumes are preserved;
+do not delete the database volume to fix a startup issue.
+
+Ngrok is a separate process. Keep `ngrok http 8001` running for public callbacks and update
+`DARAJA_CALLBACK_URL` when its address changes, then recreate `api` and `worker`. Restarting the
+application does not itself request an STK prompt; a buyer must explicitly submit the payment form.
+The worker processes requests that a buyer has already queued. SMS remains dry-run unless you
+explicitly configure live Africa's Talking credentials and mode.

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, Truck, ArrowUpRight } from "lucide-react";
 import {
@@ -103,6 +103,7 @@ export function Orders({ deliveries = false }: { deliveries?: boolean }) {
 }
 export function OrderDetail() {
   const { id } = useParams();
+  const [search] = useSearchParams();
   const { user } = useAuth();
   const order = useApi<Order>(`/orders/${id}`);
   const config = useApi<Config>("/marketplace/config");
@@ -127,6 +128,14 @@ export function OrderDetail() {
     if (intents.data?.some((i) => i.status === "succeeded"))
       queryClient.invalidateQueries({ queryKey: [`/orders/${id}`] });
   }, [intents.data, id]);
+  useEffect(() => {
+    if (order.data && search.get("payment") === "mpesa") {
+      document
+        .getElementById("mpesa-payment")
+        ?.scrollIntoView({ block: "start" });
+      document.getElementById("mpesa-payment")?.focus({ preventScroll: true });
+    }
+  }, [order.data?.id, search]);
   const o = order.data;
   const manage = manager(user?.role);
   const rider = user?.role === "rider" && o?.rider_id === user.id;
@@ -323,6 +332,8 @@ export function OrderDetail() {
                     )}
                     {(manage || buyer) &&
                       o.payment_status === "unpaid" &&
+                      !active &&
+                      intents.data &&
                       ["pending", "confirmed", "preparing", "ready"].includes(
                         o.status,
                       ) &&
@@ -377,116 +388,136 @@ export function OrderDetail() {
                     </Panel>
                   )}
                 {(buyer || manage || rider) && (
-                  <Panel title="M-Pesa sandbox">
-                    <p className="sandbox-tag">SANDBOX · NO LIVE PAYMENT</p>
-                    <p className="muted">
-                      Available only after pickup or delivery completion. A
-                      queued or accepted STK request is not proof of payment.
-                    </p>
-                    <State
-                      loading={intents.isPending && !!o}
-                      error={intents.error}
-                    >
-                      {intents.data?.map((i) => (
-                        <div className="payment-intent" key={i.id}>
-                          <strong>
-                            {i.result_code === "1032"
-                              ? "Cancelled by payer"
-                              : label(i.status)}
-                          </strong>
-                          <Badge value={i.status} />
-                          <small>
-                            Request #{i.id} · {money(i.amount)}
-                            {i.result_code ? ` · Result ${i.result_code}` : ""}
-                          </small>
-                          {i.status === "uncertain" && (
-                            <Alert tone="info">
-                              The outcome is uncertain. Do not pay again or
-                              collect cash. Ask the farm administrator to
-                              investigate this request.
-                            </Alert>
-                          )}
-                        </div>
-                      ))}
-                    </State>
-                    {active && (
+                  <div id="mpesa-payment" tabIndex={-1}>
+                    <Panel title="M-Pesa sandbox">
+                      <p className="sandbox-tag">SANDBOX · NO LIVE PAYMENT</p>
                       <p className="muted">
-                        Automatic refresh runs for up to 2 minutes while this
-                        screen is open. Use Refresh status to check again; it
-                        does not send another prompt.
+                        Request an STK prompt after placing your order, before
+                        or after handover. A queued or accepted STK request is
+                        not proof of payment. Only verified provider success
+                        marks the order paid.
                       </p>
-                    )}
-                    {buyer && !active && !!pendingBody(`mpesa.${id}`) && (
-                      <Action
-                        run={async () => {
-                          await postOnce(
-                            `mpesa.${id}`,
-                            `/orders/${id}/payments/mpesa`,
-                            pendingBody(`mpesa.${id}`),
-                          );
-                          setUntil(Date.now() + 120_000);
-                        }}
+                      <State
+                        loading={intents.isPending && !!o}
+                        error={intents.error}
                       >
-                        Recover previous payment request
-                      </Action>
-                    )}
-                    {buyer &&
-                      o.status === "completed" &&
-                      o.payment_status === "unpaid" &&
-                      !active &&
-                      intents.data && (
-                        <>
-                          {!config.data?.mpesa_ready ? (
-                            <Alert tone="info">
-                              Sandbox payments are not ready. A public HTTPS
-                              callback URL must be configured by the
-                              administrator.
-                            </Alert>
-                          ) : (
-                            <SmartForm
-                              fields={[
-                                {
-                                  name: "phone",
-                                  label: "M-Pesa phone",
-                                  type: "tel",
-                                  default: user?.phone,
-                                  hint: "A sandbox request sends a test prompt. Use your own approved test number.",
-                                },
-                              ]}
-                              submit={
-                                intents.data.some((i) => i.status === "failed")
-                                  ? "Retry sandbox payment"
-                                  : "Request sandbox payment"
-                              }
-                              success="Request queued. This is not a payment confirmation."
-                              onSubmit={async (v) => {
-                                const result = await postOnce<{
-                                  status: string;
-                                }>(
-                                  `mpesa.${id}`,
-                                  `/orders/${id}/payments/mpesa`,
-                                  { phone: v.phone },
-                                );
-                                if (
-                                  !["queued", "pending", "submitting"].includes(
-                                    result.status,
-                                  )
-                                )
-                                  throw new Error(
-                                    `The existing request is ${result.status}. Refresh status before deciding whether to retry.`,
-                                  );
-                                setUntil(Date.now() + 120_000);
-                              }}
-                            />
-                          )}
-                        </>
+                        {intents.data?.map((i) => (
+                          <div className="payment-intent" key={i.id}>
+                            <strong>
+                              {i.result_code === "1032"
+                                ? "Cancelled by payer"
+                                : label(i.status)}
+                            </strong>
+                            <Badge value={i.status} />
+                            <small>
+                              Request #{i.id} · {money(i.amount)}
+                              {i.result_code
+                                ? ` · Result ${i.result_code}`
+                                : ""}
+                            </small>
+                            {i.status === "uncertain" && (
+                              <Alert tone="info">
+                                The outcome is uncertain. Do not pay again or
+                                collect cash. Ask the farm administrator to
+                                investigate this request.
+                              </Alert>
+                            )}
+                          </div>
+                        ))}
+                      </State>
+                      {active && (
+                        <p className="muted">
+                          Automatic refresh runs for up to 2 minutes while this
+                          screen is open. Use Refresh status to check again; it
+                          does not send another prompt.
+                        </p>
                       )}
-                    {buyer && o.status !== "completed" && (
-                      <p className="muted">
-                        Complete the handover before requesting M-Pesa payment.
-                      </p>
-                    )}
-                  </Panel>
+                      {buyer && !active && !!pendingBody(`mpesa.${id}`) && (
+                        <Action
+                          run={async () => {
+                            await postOnce(
+                              `mpesa.${id}`,
+                              `/orders/${id}/payments/mpesa`,
+                              pendingBody(`mpesa.${id}`),
+                            );
+                            setUntil(Date.now() + 120_000);
+                          }}
+                        >
+                          Recover previous payment request
+                        </Action>
+                      )}
+                      {buyer &&
+                        !["cancelled", "expired"].includes(o.status) &&
+                        o.payment_status === "unpaid" &&
+                        !active &&
+                        intents.data && (
+                          <>
+                            {!config.data?.mpesa_ready ? (
+                              <Alert tone="info">
+                                Sandbox payments are not ready. A public HTTPS
+                                callback URL must be configured by the
+                                administrator.
+                              </Alert>
+                            ) : (
+                              <SmartForm
+                                fields={[
+                                  {
+                                    name: "phone",
+                                    label: "M-Pesa phone",
+                                    type: "tel",
+                                    default: user?.phone,
+                                    hint: "A sandbox request sends a test prompt. Use your own approved test number.",
+                                  },
+                                ]}
+                                submit={
+                                  intents.data.some(
+                                    (i) => i.status === "failed",
+                                  )
+                                    ? "Retry sandbox payment"
+                                    : "Request sandbox payment"
+                                }
+                                success="Request queued. This is not a payment confirmation."
+                                onSubmit={async (v) => {
+                                  const result = await postOnce<{
+                                    status: string;
+                                  }>(
+                                    `mpesa.${id}`,
+                                    `/orders/${id}/payments/mpesa`,
+                                    { phone: v.phone },
+                                  );
+                                  if (
+                                    ![
+                                      "queued",
+                                      "pending",
+                                      "submitting",
+                                    ].includes(result.status)
+                                  )
+                                    throw new Error(
+                                      `The existing request is ${result.status}. Refresh status before deciding whether to retry.`,
+                                    );
+                                  setUntil(Date.now() + 120_000);
+                                }}
+                              />
+                            )}
+                          </>
+                        )}
+                      {active && (
+                        <Alert tone="info">
+                          Cancellation is blocked while payment is active or
+                          uncertain, so a payment cannot arrive after stock is
+                          released.
+                        </Alert>
+                      )}
+                      {o.payment_status === "paid" &&
+                        o.status !== "completed" && (
+                          <Alert tone="success">
+                            Payment verified. Your order is still being
+                            fulfilled; paid orders cannot be cancelled without a
+                            refund workflow.
+                          </Alert>
+                        )}
+                    </Panel>
+                  </div>
                 )}
                 {(manage || rider) &&
                   o.status === "completed" &&
