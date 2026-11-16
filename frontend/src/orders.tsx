@@ -12,7 +12,7 @@ import {
   queryClient,
 } from "./api";
 import { useAuth } from "./auth";
-import type { Order, User, Intent, Config } from "./types";
+import type { Order, User, Intent, Config, Notification } from "./types";
 import { money, date, label, manager, quantity } from "./utils";
 import {
   Action,
@@ -140,6 +140,10 @@ export function OrderDetail() {
   const manage = manager(user?.role);
   const rider = user?.role === "rider" && o?.rider_id === user.id;
   const buyer = user?.role === "buyer";
+  const notifications = useApi<Notification[]>(
+    `/orders/${id}/notifications`,
+    buyer && !!o,
+  );
   const active = intents.data?.some((i) => activeIntents.includes(i.status));
   const transitions: Record<string, string> = {
     pending: "confirmed",
@@ -265,6 +269,37 @@ export function OrderDetail() {
                 </Panel>
               </div>
               <div>
+                {buyer && (
+                  <Panel title="SMS updates">
+                    <p className="muted">
+                      Order and payment updates use your saved account phone:{" "}
+                      {user?.phone}. The M-Pesa payer number does not change
+                      this recipient.
+                    </p>
+                    <State
+                      loading={notifications.isPending}
+                      error={notifications.error}
+                    >
+                      <DataTable
+                        headers={["Update", "Status", "Recipient"]}
+                        rows={(notifications.data || []).map((n) => [
+                          label(n.event_type || "update"),
+                          <Badge value={n.status} />,
+                          n.recipient_masked,
+                        ])}
+                      />
+                    </State>
+                    <p className="muted">
+                      Accepted means submitted to the SMS provider. Delivered
+                      means a carrier receipt confirmed delivery. Dry-run sends
+                      no SMS. SMS delays do not change your order or payment
+                      status.
+                    </p>
+                    <Action run={() => notifications.refetch()}>
+                      Refresh SMS status
+                    </Action>
+                  </Panel>
+                )}
                 <Panel title="Next steps">
                   <div className="flow-note">
                     <ClipboardList size={22} />

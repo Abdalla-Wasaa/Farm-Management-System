@@ -49,18 +49,63 @@ Default `SMS_MODE=dry-run` persists attempts without contacting a provider. Work
 reservation expiry and the transactional notification outbox; SMS failures never undo orders.
 Set `SMS_MODE=sandbox`, `AT_USERNAME=sandbox`, and a sandbox API key to use Africa's Talking's
 sandbox simulator. Use the simulator's configured test mobile numbers. Sandbox is not live SMS.
-Live requires explicitly setting `SMS_MODE=live`, your live username/key, and optionally an approved
-sender ID. Keep credentials in `.env`, never Git. Templates omit full addresses.
+Live requires `SMS_MODE=live`, credentials from the live application, an approved
+transactional `AT_SENDER_ID`, `SMS_TRANSACTIONAL_APPROVED=true`, and a private
+`SMS_DELIVERY_TOKEN` of at least 32 characters. Keep credentials in `.env`, never Git.
+Templates omit full addresses. These configuration flags record provider approval;
+they cannot grant it or override a recipient/carrier opt-out.
 
-The worker records sanitized provider status/message IDs, not complete response bodies (which can
-contain recipient numbers). HTTP 429/5xx, transport errors and malformed responses retry with capped
-exponential backoff, at most 5 attempts. Other rejected responses fail permanently. Operational
-status/attempt history is available to admins at `/admin/notifications`.
-Unique event keys prevent duplicate logical notifications. Provider submission is not proof of handset
-delivery. There is no delivery-report webhook yet. A crash after provider acceptance and before DB
-commit, or an ambiguous timeout, can result in a duplicate SMS: Africa's Talking has no client
-idempotency guarantee here. This MVP provides at-least-once submission, not exactly-once delivery.
-Dry-run events are terminal and are never automatically replayed as live messages.
+Order placement queues a buyer acknowledgement and a seller notification in the same
+transaction as the order. Buyer confirmation, cancellation, dispatch, delivery and payment
+updates use the buyer User record's normalized saved phone. `SMS_TEST_PHONE`, checkout
+address and the M-Pesa payer number never select the SMS recipient. Payment acknowledgements
+are queued once only after verified sandbox M-Pesa success or authorized cash receipt.
+Failed or delayed SMS never change order/payment status. Numbers are syntactically validated
+at registration; phone ownership verification via OTP is not implemented.
+
+The worker persists its submission claim before contacting the provider and records
+sanitized status/message IDs. Connection establishment failures, HTTP 429/5xx and known
+provider temporary failures retry with exponential backoff (default maximum 5 attempts).
+Ambiguous transport timeouts, malformed successful responses and interrupted claims are
+held as `uncertain` for investigation, without automatic resending. Exactly-once delivery
+cannot be guaranteed by the provider; do not blindly replay uncertain submissions.
+Admin **People & notifications** shows masked recipients, failures, readiness and receipts.
+A limited, audited retry is available for failed configuration/credit issues; opted-out,
+uncertain, delivered, dry-run and one-message tests cannot be replayed there.
+
+`accepted` means provider submission only. Authenticated carrier reports can mark an SMS
+`delivered` or `failed`. Early reports are stored, duplicate reports are ignored and late
+failure/progress reports cannot downgrade delivered status. SMS receipts never mark an
+order paid. Dry-run events are terminal and never replay automatically as live messages.
+
+### Activate transactional buyer notifications
+
+1. Ask Africa's Talking to approve your sender ID for **transactional order/payment SMS**.
+   Credit and an API key alone are insufficient. Error 406 (`UserInBlacklist`) needs provider
+   investigation; asking every customer to enable promotional SMS is not the production workflow.
+2. Save the approved sender, live username/key and approval flag in `.env`. Generate
+   `SMS_DELIVERY_TOKEN` with `.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+   Keep `SMS_MODE=dry-run` while configuring. Never put these values in frontend env.
+3. In Africa's Talking **SMS → Callback URLs**, configure the delivery-report URL:
+   `https://YOUR_PUBLIC_HOST/webhooks/sms/delivery?key=YOUR_PRIVATE_SMS_DELIVERY_TOKEN`.
+   This is separate from Daraja's `/payments/mpesa/callback`. Use stable public HTTPS in
+   production; a testing ngrok URL must be updated when it changes. Keep the complete URL
+   private and redact its query from proxy logs; application access logs already redact it.
+   The callback accepts JSON or URL-encoded `id`, `status`, optional `phoneNumber` and
+   `failureReason`. Set your provider delivery callback method to POST.
+4. Run an explicitly requested single-message test with the allowlist restricted to your
+   own phone. Confirm actual handset delivery and receipt status. Investigate 406 with AT
+   before activation. The admin readiness check validates local configuration, not provider
+   approval, balance, callback reachability or successful delivery.
+5. Set `SMS_MODE=live` and `SMS_ALLOWED_RECIPIENTS=[]` to enable **new** notifications for all
+   saved buyer numbers, then `COMPOSE_BAKE=false docker compose up -d --build`.
+   Keep the worker running and monitor failures/balance in the admin screen/provider dashboard.
+   Historical dry-run notifications are not resent. SMS has a per-message cost; the existing
+   Daraja integration remains sandbox, and its payment messages explicitly say Sandbox.
+
+The current development setup remains dry-run until the approved sender and delivery test
+are complete. Provider references: [Kenya transactional sender requirements](https://help.africastalking.com/en/articles/12381163-bulk-sms-kenya),
+[configure callbacks](https://help.africastalking.com/en/articles/2206161-how-do-i-configure-my-callback-url).
 
 Provider reference: https://help.africastalking.com/en/articles/742491-why-did-my-messages-fail
 
@@ -363,7 +408,9 @@ Start with normal application SMS still in dry-run:
 SMS_MODE=dry-run
 AT_USERNAME=YOUR_LIVE_APP_USERNAME
 AT_API_KEY=YOUR_LIVE_API_KEY
-AT_SENDER_ID=YOUR_APPROVED_SENDER_ID
+AT_SENDER_ID=YOUR_APPROVED_TRANSACTIONAL_SENDER
+SMS_TRANSACTIONAL_APPROVED=true
+SMS_DELIVERY_TOKEN=YOUR_PRIVATE_RANDOM_TOKEN_AT_LEAST_32_CHARACTERS
 SMS_TEST_PHONE=YOUR_OWN_KENYAN_NUMBER
 SMS_ALLOWED_RECIPIENTS=["YOUR_OWN_NUMBER_IN_PLUS254_FORMAT"]
 ```

@@ -138,6 +138,14 @@ export interface Summary {
 export interface Notification {
   id: number;
   event_key: string;
+  event_type: string | null;
+  order_id: number | null;
+  recipient_masked: string;
+  last_error: string | null;
+  submitted_at: string | null;
+  delivered_at: string | null;
+  provider_message_id: string | null;
+  can_retry: boolean;
   status: string;
   attempts: number;
   next_attempt: string;

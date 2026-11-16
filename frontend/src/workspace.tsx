@@ -494,6 +494,12 @@ export function Admin() {
   const b = useBusiness();
   const users = useApi<User[]>("/admin/users");
   const notes = useApi<Notification[]>("/admin/notifications");
+  const readiness = useApi<{
+    mode: string;
+    production_ready: boolean;
+    reasons: string[];
+    recipient_restriction_enabled: boolean;
+  }>("/admin/notifications/readiness");
   return (
     <>
       <Heading
@@ -564,21 +570,65 @@ export function Admin() {
           />
         </State>
       </Panel>
-      <Panel title="SMS notification submissions">
+      <Panel title="SMS delivery & recovery">
+        {readiness.data && (
+          <Alert tone={readiness.data.production_ready ? "success" : "info"}>
+            SMS mode: {label(readiness.data.mode)}.{" "}
+            {readiness.data.production_ready
+              ? "Transactional sender configuration complete."
+              : readiness.data.reasons.map(label).join(" · ")}
+            {readiness.data.recipient_restriction_enabled &&
+              " Recipient test restriction is enabled."}
+          </Alert>
+        )}
+        {readiness.error && <Alert>{readiness.error.message}</Alert>}
         <State loading={notes.isPending} error={notes.error}>
           <DataTable
-            headers={["Event", "Status", "Attempts", "Next scheduled attempt"]}
+            headers={[
+              "Event / order",
+              "Recipient",
+              "Status",
+              "Attempts",
+              "Last issue",
+              "Delivery",
+              "Recovery",
+            ]}
             rows={(notes.data || []).map((n) => [
-              n.event_key,
+              n.order_id ? (
+                <Link to={`/orders/${n.order_id}`}>
+                  {label(n.event_type || "update")} · #{n.order_id}
+                </Link>
+              ) : (
+                n.event_key
+              ),
+              n.recipient_masked,
               <Badge value={n.status} />,
               n.attempts,
-              n.status === "pending" ? date(n.next_attempt) : "—",
+              n.last_error ? label(n.last_error) : "—",
+              n.delivered_at
+                ? date(n.delivered_at)
+                : n.submitted_at
+                  ? "Awaiting receipt"
+                  : "—",
+              n.can_retry ? (
+                <Action
+                  confirm="Retry this failed SMS after resolving its configuration or balance issue? A successful submission may incur an SMS charge."
+                  run={() => send(`/admin/notifications/${n.id}/retry`, {})}
+                >
+                  Retry SMS
+                </Action>
+              ) : (
+                "—"
+              ),
             ])}
           />
         </State>
         <p className="muted">
           Dry-run means no SMS was sent. Accepted means provider submission
-          only; handset delivery receipts are not implemented.
+          only. Delivered means a success receipt was received from the carrier.
+          Uncertain submissions are held for investigation to prevent duplicate
+          SMS. Recipient opted out requires provider investigation; it cannot be
+          retried here.
         </p>
       </Panel>
     </>

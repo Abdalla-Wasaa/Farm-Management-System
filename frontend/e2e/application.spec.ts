@@ -149,6 +149,16 @@ test("buyer → seller → admin → rider → cash receipt, then production tra
   );
   await buyer.getByRole("button", { name: "Place order" }).click();
   await expect(buyer).toHaveURL(/orders\/\d+$/);
+  await expect(
+    buyer.getByRole("heading", { name: "SMS updates", exact: true }),
+  ).toBeVisible();
+  const smsUpdates = buyer.locator("section").filter({
+    has: buyer.getByRole("heading", { name: "SMS updates", exact: true }),
+  });
+  await expect(
+    smsUpdates.getByRole("cell", { name: "Placed", exact: true }),
+  ).toBeVisible();
+  await expect(smsUpdates).toContainText(a.buyer.phone);
   const orderPath = new URL(buyer.url()).pathname;
   await expect(buyer.locator(".status-strip")).toContainText("Pending");
   await seller.goto(orderPath);
@@ -165,7 +175,9 @@ test("buyer → seller → admin → rider → cash receipt, then production tra
   await admin
     .getByRole("button", { name: "Assign rider", exact: true })
     .click();
-  await expect(admin.getByText("Saved successfully.")).toBeVisible();
+  await expect(
+    admin.getByText(`Assigned rider #${a.rider.id}`, { exact: true }),
+  ).toBeVisible();
   await login(rider, "rider");
   await expect(rider).toHaveURL(/deliveries/);
   await rider.getByRole("link", { name: /^PF-/, exact: false }).first().click();
@@ -184,6 +196,9 @@ test("buyer → seller → admin → rider → cash receipt, then production tra
   await expect(buyer.locator(".status-strip")).toContainText("Completed");
   await expect(buyer.locator(".status-strip")).toContainText("Delivered");
   await expect(buyer.locator(".status-strip")).toContainText("Paid");
+  await expect(
+    smsUpdates.getByRole("cell", { name: "Paid", exact: true }),
+  ).toBeVisible();
   await expect(
     buyer.getByText("browser-cash-receipt", { exact: true }),
   ).toBeVisible();
