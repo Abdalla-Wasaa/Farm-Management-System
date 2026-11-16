@@ -7,6 +7,7 @@ have one attempt only: a transport timeout is uncertain, never automatically res
 import argparse
 import json
 import os
+from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -14,7 +15,8 @@ from sqlalchemy.exc import IntegrityError
 from app import sms
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Notification, NotificationAttempt
+from app.models import Notification, now
+from app.notifications import record_attempt
 from app.schemas import phone_number
 
 MESSAGE = "Kuku Farm: SMS connection test. Order and verified payment updates will use this channel."
@@ -38,6 +40,10 @@ def send_one_test(phone, reference, *, live=False, sender=None):
         and phone not in settings.sms_allowed_recipients
     ):
         raise ValueError("Test phone is not in SMS_ALLOWED_RECIPIENTS")
+    if live and not sms.readiness()["production_ready"]:
+        raise ValueError(
+            "Configure an approved transactional sender and delivery token before live sending"
+        )
     key = "sms-test:" + reference
     with SessionLocal.begin() as db:
         previous = db.scalar(select(Notification).where(Notification.event_key == key))
@@ -50,7 +56,13 @@ def send_one_test(phone, reference, *, live=False, sender=None):
                 "reused": True,
             }
         note = Notification(
-            event_key=key, phone=phone, message=MESSAGE, status="sending"
+            event_key=key,
+            phone=phone,
+            message=MESSAGE,
+            status="sending",
+            attempts=1,
+            claimed_at=now(),
+            next_attempt=now() + timedelta(seconds=settings.sms_claim_seconds),
         )
         db.add(note)
         db.flush()
@@ -68,19 +80,7 @@ def send_one_test(phone, reference, *, live=False, sender=None):
     with SessionLocal.begin() as db:
         note = db.get(Notification, notification_id)
         note.attempts = 1
-        note.status = {
-            "accepted": "accepted",
-            "dry-run": "dry-run",
-            "blocked": "blocked",
-            "permanent": "failed",
-        }.get(result.outcome, "uncertain")
-        db.add(
-            NotificationAttempt(
-                notification_id=note.id,
-                outcome=result.outcome,
-                provider_response=result.response,
-            )
-        )
+        record_attempt(db, note, result, retry_temporary=False)
         return {
             "notification_id": note.id,
             "status": note.status,

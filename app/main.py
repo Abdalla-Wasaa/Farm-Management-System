@@ -2,7 +2,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -25,7 +25,6 @@ from app.models import (
     Flock,
     Movement,
     Notification,
-    NotificationAttempt,
     Order,
     OrderItem,
     Payment,
@@ -33,6 +32,9 @@ from app.models import (
     ProductionTransfer,
     User,
 )
+from app.sms_callbacks import install_log_filter
+
+install_log_filter()
 
 app = FastAPI(title="Poultry Farm & Marketplace", version="0.1.0")
 app.add_middleware(
@@ -270,23 +272,10 @@ def order_audit(order_id: int, db: DB, actor: Actor):
 @app.get("/admin/notifications")
 def notifications(db: DB, actor: Actor):
     require(actor, "admin")
-    # Exclude recipient phone and message contents from operational views.
+    from app.notifications import notification_view
+
     return [
-        {
-            "id": n.id,
-            "event_key": n.event_key,
-            "status": n.status,
-            "attempts": n.attempts,
-            "next_attempt": n.next_attempt,
-            "history": [
-                row(a)
-                for a in db.scalars(
-                    select(NotificationAttempt).where(
-                        NotificationAttempt.notification_id == n.id
-                    )
-                )
-            ],
-        }
+        notification_view(db, n, history=True)
         for n in db.scalars(
             select(Notification).order_by(Notification.id.desc()).limit(100)
         )
@@ -489,3 +478,75 @@ def update_product(product_id: int, data: s.ProductIn, db: DB, actor: Actor):
 @app.post("/products/{product_id}/adjustments")
 def adjust_product(product_id: int, data: s.AdjustmentIn, db: DB, actor: Actor):
     return product_view(catalog.adjust_stock(db, actor, product_id, data))
+
+
+@app.get("/admin/notifications/readiness")
+def sms_readiness(actor: Actor):
+    require(actor, "admin")
+    from app.sms import readiness
+
+    return readiness()
+
+
+@app.post("/admin/notifications/{notification_id}/retry")
+def retry_sms(notification_id: int, db: DB, actor: Actor):
+    from app.notifications import notification_view, retry_notification
+
+    return notification_view(
+        db, retry_notification(db, actor, notification_id), history=True
+    )
+
+
+@app.get("/orders/{order_id}/notifications")
+def buyer_notifications(order_id: int, db: DB, actor: Actor):
+    svc.view_order(db, actor, order_id)
+    from app.notifications import notification_view
+
+    return [
+        notification_view(db, n)
+        for n in db.scalars(
+            select(Notification)
+            .where(
+                Notification.order_id == order_id,
+                Notification.recipient_user_id == actor.id,
+            )
+            .order_by(Notification.id)
+        )
+    ]
+
+
+@app.post("/webhooks/sms/delivery")
+async def sms_delivery_report(request: Request, db: DB):
+    from urllib.parse import parse_qs
+
+    from pydantic import ValidationError
+    from starlette.concurrency import run_in_threadpool
+
+    from app.notifications import receive_report
+    from app.sms_callbacks import authenticate
+
+    authenticate(request.query_params.get("key", ""))
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 4096:
+            raise HTTPException(413, "Callback payload too large")
+    try:
+        if request.headers.get("content-type", "").split(";")[0] == "application/json":
+            import json
+
+            values = json.loads(body)
+        elif (
+            request.headers.get("content-type", "").split(";")[0]
+            == "application/x-www-form-urlencoded"
+        ):
+            values = {
+                k: v[-1]
+                for k, v in parse_qs(body.decode(), keep_blank_values=True).items()
+            }
+        else:
+            raise HTTPException(415, "Use JSON or URL-encoded form data")
+        report = s.SmsReport.model_validate(values)
+    except (ValueError, UnicodeError, ValidationError):
+        raise HTTPException(422, "Invalid delivery report")
+    return await run_in_threadpool(receive_report, db, report)

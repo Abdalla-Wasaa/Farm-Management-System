@@ -166,3 +166,16 @@ class MpesaCallback(BaseModel):
 class AdjustmentIn(Input):
     quantity: Decimal = Field(max_digits=12, decimal_places=3)
     source: str = Field(min_length=1, max_length=100)
+
+
+class SmsReport(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(min_length=1, max_length=120)
+    status: Literal["Sent", "Submitted", "Buffered", "Rejected", "Success", "Failed"]
+    phoneNumber: str | None = None
+    failureReason: str | None = Field(default=None, max_length=80)
+
+    @field_validator("phoneNumber")
+    @classmethod
+    def normalize_report_phone(cls, value):
+        return phone_number(value) if value else None

@@ -63,7 +63,12 @@ def notify(db, order, event, user_id, text):
         user = get_or_404(db, User, user_id)
         db.add(
             Notification(
-                event_key=key, phone=user.phone, message=f"{order.reference}: {text}"
+                event_key=key,
+                recipient_user_id=user.id,
+                order_id=order.id,
+                event_type=event,
+                phone=user.phone,
+                message=f"Kuku Farm {order.reference}: {text}",
             )
         )
 
@@ -169,6 +174,13 @@ def place_order(db, actor, data, key):
         "new",
         business.owner_id,
         "New order received. Please confirm availability.",
+    )
+    notify(
+        db,
+        order,
+        "placed",
+        order.buyer_id,
+        f"Order received. Total KES {order.total:.2f}. Awaiting farm confirmation.",
     )
     audit(db, order, actor, "created")
     return order

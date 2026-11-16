@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     at_api_key: str = ""
     at_sender_id: str = ""
     sms_allowed_recipients: list[str] = []
+    sms_transactional_approved: bool = False
+    sms_delivery_token: SecretStr = SecretStr("")
+    sms_max_attempts: int = Field(default=5, ge=1, le=10)
+    sms_claim_seconds: int = Field(default=120, ge=30, le=600)
 
     @field_validator("sms_allowed_recipients")
     @classmethod

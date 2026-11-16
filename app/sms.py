@@ -14,6 +14,28 @@ class Result:
     response: dict
 
 
+def readiness():
+    reasons = []
+    if (
+        not settings.at_api_key
+        or not settings.at_username
+        or settings.at_username == "sandbox"
+    ):
+        reasons.append("live_application_credentials_missing")
+    if not settings.at_sender_id or not settings.sms_transactional_approved:
+        reasons.append("transactional_sender_not_approved")
+    if len(settings.sms_delivery_token.get_secret_value()) < 32:
+        reasons.append("delivery_callback_token_missing")
+    return {
+        "mode": settings.sms_mode,
+        "production_ready": not reasons,
+        "reasons": reasons,
+        "recipient_restriction_enabled": bool(settings.sms_allowed_recipients),
+        "delivery_tracking_enabled": len(settings.sms_delivery_token.get_secret_value())
+        >= 32,
+    }
+
+
 def send(phone, message):
     if settings.sms_mode == "dry-run":
         return Result("dry-run", {"mode": "dry-run"})
@@ -23,6 +45,15 @@ def send(phone, message):
         return Result("permanent", {"error": "invalid_recipient"})
     if settings.sms_allowed_recipients and phone not in settings.sms_allowed_recipients:
         return Result("blocked", {"error": "recipient_not_allowlisted"})
+    if settings.sms_mode == "live" and not readiness()["production_ready"]:
+        return Result(
+            "permanent",
+            {
+                "error": "transactional_sender_not_approved"
+                if not settings.at_sender_id or not settings.sms_transactional_approved
+                else "provider_configuration"
+            },
+        )
     if not settings.at_api_key or (
         settings.sms_mode == "live" and settings.at_username == "sandbox"
     ):
@@ -50,14 +81,22 @@ def send(phone, message):
             return Result("permanent", {"http_status": response.status_code})
         recipients = response.json()["SMSMessageData"]["Recipients"]
         if len(recipients) != 1:
-            return Result("temporary", {"error": "invalid_recipient_response"})
+            return Result("uncertain", {"error": "invalid_recipient_response"})
         recipient = recipients[0]
         code = int(recipient["statusCode"])
-        safe = {"status_code": code, "message_id": recipient.get("messageId", "")}
+        message_id = recipient.get("messageId")
+        safe = {
+            "status_code": code,
+            "message_id": message_id
+            if isinstance(message_id, str) and message_id != "None"
+            else "",
+        }
         if code in (100, 101, 102):
             return Result("accepted", safe)
         return Result("temporary" if code in (500, 501) else "permanent", safe)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+        return Result("temporary", {"error": "connection_unavailable"})
     except httpx.TransportError:
-        return Result("temporary", {"error": "transport_error"})
+        return Result("uncertain", {"error": "submission_outcome_unknown"})
     except (ValueError, KeyError, TypeError):
-        return Result("temporary", {"error": "malformed_provider_response"})
+        return Result("uncertain", {"error": "malformed_provider_response"})

@@ -111,7 +111,7 @@ def test_full_flow_and_payment(shop):
     with SessionLocal() as db:
         product = db.get(Product, u["product_id"])
         assert product.stock == 8 and product.reserved == 0
-        assert db.scalar(select(func.count()).select_from(Notification)) == 6
+        assert db.scalar(select(func.count()).select_from(Notification)) == 7
         assert db.scalar(select(func.count()).select_from(Payment)) == 1
 
 

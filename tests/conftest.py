@@ -8,6 +8,8 @@ os.environ["DARAJA_MODE"] = "disabled"
 # Never inherit live SMS credentials or recipient restrictions from a developer's .env.
 for key, value in {
     "SMS_MODE": "dry-run",
+    "SMS_TRANSACTIONAL_APPROVED": "false",
+    "SMS_DELIVERY_TOKEN": "",
     "AT_USERNAME": "sandbox",
     "AT_API_KEY": "",
     "AT_SENDER_ID": "",
@@ -33,7 +35,7 @@ def setup_db():
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE users, businesses, products, orders, order_items, inventory_movements, payments, audit_events, notifications, notification_attempts, business_members, flocks, daily_records, production_transfers, expenses, mpesa_intents RESTART IDENTITY CASCADE"
+                "TRUNCATE sms_delivery_reports, users, businesses, products, orders, order_items, inventory_movements, payments, audit_events, notifications, notification_attempts, business_members, flocks, daily_records, production_transfers, expenses, mpesa_intents RESTART IDENTITY CASCADE"
             )
         )
     with SessionLocal.begin() as db:

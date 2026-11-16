@@ -111,6 +111,8 @@ def test_sandbox_flow_verification_and_no_double_payment(mpesa_shop):
             select(Notification).where(Notification.event_key.contains(":paid:"))
         ).all()
         assert len(notes) == 1 and "Sandbox" in notes[0].message
+        assert notes[0].phone == "+254712345602"  # Saved buyer, not STK payer.
+        assert notes[0].recipient_user_id == u["buyer2"]["id"]
     assert c.post("/payments/mpesa/callback", json=callback).status_code == 200
     assert request(c, u, oid, key="already-paid").status_code == 409
     status = c.get(

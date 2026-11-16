@@ -11,6 +11,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -161,6 +162,19 @@ class Notification(Base):
     __tablename__ = "notifications"
     id: Mapped[int] = mapped_column(primary_key=True)
     event_key: Mapped[str] = mapped_column(String(150), unique=True)
+    recipient_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), index=True
+    )
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), index=True)
+    event_type: Mapped[str | None] = mapped_column(String(30))
+    provider_message_id: Mapped[str | None] = mapped_column(String(120), unique=True)
+    last_error: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now, server_default=func.now()
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     phone: Mapped[str] = mapped_column(String(13))
     message: Mapped[str] = mapped_column(String(500))
     status: Mapped[str] = mapped_column(String(20), default="pending")
@@ -280,3 +294,14 @@ class MpesaIntent(Base):
         CheckConstraint("amount > 0", name="ck_mpesa_intent_amount"),
         Index("ix_mpesa_intents_queue", "status", "next_check"),
     )
+
+
+class SmsDeliveryReport(Base):
+    __tablename__ = "sms_delivery_reports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider_message_id: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(20))
+    phone: Mapped[str | None] = mapped_column(String(13))
+    failure_reason: Mapped[str | None] = mapped_column(String(80))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (UniqueConstraint("provider_message_id", "status"),)

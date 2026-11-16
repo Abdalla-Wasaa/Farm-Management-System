@@ -2,6 +2,7 @@ from datetime import timedelta
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import func, select
 from test_marketplace import advance, place
 
@@ -21,11 +22,13 @@ def test_sms_failure_does_not_rollback_order(shop):
         )
     with SessionLocal() as db:
         assert db.get(Order, order["id"]) is not None
-        n = db.scalar(select(Notification))
+        n = db.scalar(select(Notification).order_by(Notification.id))
         assert n.status == "pending" and n.attempts == 1
         assert db.scalar(select(func.count()).select_from(NotificationAttempt)) == 1
     with SessionLocal.begin() as db:
-        db.scalar(select(Notification)).next_attempt = now() - timedelta(seconds=1)
+        db.scalar(select(Notification).order_by(Notification.id)).next_attempt = (
+            now() - timedelta(seconds=1)
+        )
     with SessionLocal.begin() as db:
         assert process_one(
             db,
@@ -34,14 +37,15 @@ def test_sms_failure_does_not_rollback_order(shop):
             ),
         )
     with SessionLocal.begin() as db:
+        assert process_one(db)  # The independent buyer acknowledgement.
         assert not process_one(db)
-        n = db.scalar(select(Notification))
+        n = db.scalar(select(Notification).order_by(Notification.id))
         assert n.attempts == 2 and n.status == "accepted"
 
 
-def test_retry_exhaustion_and_permanent_failure(shop):
-    c, u = shop
-    place(c, u)
+def test_retry_exhaustion_and_permanent_failure(setup_db):
+    with SessionLocal.begin() as db:
+        db.add(Notification(event_key="retry", phone="+254712345678", message="test"))
     for i in range(5):
         with SessionLocal.begin() as db:
             db.scalar(select(Notification)).next_attempt = now() - timedelta(seconds=1)
@@ -75,7 +79,7 @@ def test_dry_run_and_duplicate_events(shop, monkeypatch):
     tick()
     with SessionLocal() as db:
         notes = db.scalars(select(Notification)).all()
-        assert len(notes) == 2 and all(n.status == "dry-run" for n in notes)
+        assert len(notes) == 3 and all(n.status == "dry-run" for n in notes)
         assert not any(":paid:" in n.event_key for n in notes)
 
 
@@ -109,7 +113,7 @@ def test_dry_run_and_duplicate_events(shop, monkeypatch):
         (httpx.Response(503), "temporary"),
         (httpx.Response(429), "temporary"),
         (httpx.Response(401), "permanent"),
-        (httpx.Response(200, json={}), "temporary"),
+        (httpx.Response(200, json={}), "uncertain"),
         (
             httpx.Response(
                 200, json={"SMSMessageData": {"Recipients": [{"statusCode": 404}]}}
@@ -140,13 +144,16 @@ def test_network_failure(monkeypatch):
         raise httpx.ReadTimeout("sensitive request")
 
     monkeypatch.setattr(httpx, "post", post)
-    assert sms.send("+254712345678", "private").outcome == "temporary"
+    assert sms.send("+254712345678", "private").outcome == "uncertain"
 
 
 def test_live_sms_allowlist_blocks_other_numbers(monkeypatch):
     monkeypatch.setattr(settings, "sms_mode", "live")
     monkeypatch.setattr(settings, "at_api_key", "dummy-live-key")
     monkeypatch.setattr(settings, "at_username", "test-app")
+    monkeypatch.setattr(settings, "at_sender_id", "Approved")
+    monkeypatch.setattr(settings, "sms_transactional_approved", True)
+    monkeypatch.setattr(settings, "sms_delivery_token", SecretStr("t" * 40))
     monkeypatch.setattr(settings, "sms_allowed_recipients", ["+254712345678"])
     calls = []
 
@@ -170,9 +177,9 @@ def test_live_sms_allowlist_blocks_other_numbers(monkeypatch):
     assert len(calls) == 1
 
 
-def test_blocked_events_are_terminal_without_retry(shop):
-    c, u = shop
-    place(c, u)
+def test_blocked_events_are_terminal_without_retry(setup_db):
+    with SessionLocal.begin() as db:
+        db.add(Notification(event_key="blocked", phone="+254712345678", message="test"))
     with SessionLocal.begin() as db:
         assert process_one(
             db, lambda *a: sms.Result("blocked", {"error": "recipient_not_allowlisted"})
@@ -189,6 +196,9 @@ def test_one_sms_test_does_not_drain_outbox_or_repeat(shop, monkeypatch):
     place(c, u)
     monkeypatch.setattr(settings, "at_api_key", "dummy-live-key")
     monkeypatch.setattr(settings, "at_username", "test-app")
+    monkeypatch.setattr(settings, "at_sender_id", "Approved")
+    monkeypatch.setattr(settings, "sms_transactional_approved", True)
+    monkeypatch.setattr(settings, "sms_delivery_token", SecretStr("t" * 40))
     calls = []
 
     def sender(*args):
@@ -221,6 +231,9 @@ def test_one_sms_timeout_is_not_automatically_retried(setup_db, monkeypatch):
 
     monkeypatch.setattr(settings, "at_api_key", "dummy-live-key")
     monkeypatch.setattr(settings, "at_username", "test-app")
+    monkeypatch.setattr(settings, "at_sender_id", "Approved")
+    monkeypatch.setattr(settings, "sms_transactional_approved", True)
+    monkeypatch.setattr(settings, "sms_delivery_token", SecretStr("t" * 40))
     result = send_one_test(
         "0712345678",
         "ambiguous-test",
