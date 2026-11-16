@@ -315,6 +315,6 @@ frontend build, backend tests, browser tests, or account seed scripts.
 
 Local verification passed 42 backend tests and 7 Playwright scenarios. The frontend production
 build also passed TypeScript checking and was checked for configured backend/provider secrets.
-The optional frontend Docker image could not be fetched here because Docker Hub DNS resolution
-failed; use `npm run dev` or `npm run build && npm run preview -- --port 5173` while that network
-issue remains. Existing backend containers continue running on port 8001.
+The frontend Docker image also built successfully after a transient Docker Hub DNS issue
+cleared. The nginx frontend now serves port 5173, including direct links to application routes.
+Existing backend containers continue running on port 8001.
