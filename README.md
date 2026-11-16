@@ -12,6 +12,7 @@ cp .env.example .env
 # DATABASE_URL is used by host commands. Match its password to POSTGRES_PASSWORD.
 python3 -m venv .venv
 . .venv/bin/activate
+pip install -r requirements.lock
 pip install -e '.[test]'
 docker compose up -d db
 alembic upgrade head
@@ -73,3 +74,55 @@ DATABASE_URL=postgresql+psycopg://farm:YOUR_PASSWORD@localhost:5432/farm_test py
 ```
 
 Tests mock provider calls and exercise real PostgreSQL transactions and competing buyers.
+
+## Reproduce the complete flow
+
+With API and database running, create an administrator as above, then run:
+
+```sh
+python scripts/demo.py
+python -m app.worker --once
+```
+
+The script prompts for admin credentials and new buyer/rider credentials, creates stock, registers
+and logs in the buyer, browses products, places and retries an order, confirms/prepares it using the
+admin's business authority, assigns a rider, dispatches/delivers, records cash, and checks completion.
+Use fresh buyer/rider phone numbers per run. It changes your local database. Do not use on production.
+The seller can perform confirmation/preparation using their own login; the tests exercise this path.
+
+## Farm records
+
+Create broiler/layer batches using `/flocks`. One immutable daily record per flock/date contains
+mortality, eggs (layers only), and feed kilograms. Repeating identical daily data returns the original;
+conflicting data returns 409. Mortality updates biological counts; recording eggs does not create stock.
+
+`POST /flocks/{id}/transfers` explicitly creates saleable inventory. Egg transfers name a daily record;
+a tray is **30 eggs**. Bird harvests specify `birds_removed`; kilogram harvests also specify measured
+saleable weight. Transfers share the flock's business, carry an immutable source key, and emit inventory
+movements. Identical source retries return the existing transfer; conflicting retries fail. Manual stock
+receipts are for purchased/opening stock; use production transfers for flock output to preserve lineage.
+Cancellation of an order never adds birds back into a flock.
+
+Admin assigns seller/staff business membership at `/businesses/{id}/members`. Owners and assigned
+staff can manage that business; other businesses stay private. Expenses have unique source references,
+optional flock attribution, date, category and KES amount. `/businesses/{id}/summary?start=YYYY-MM-DD&end=YYYY-MM-DD`
+reports mortality, eggs, feed, sales by unit, cash receipts and expenses over Nairobi calendar dates.
+Cash less expenses is not accrual profit; no invented feed/egg/bird unit conversions are applied.
+
+## Scope and remaining work
+
+Implemented: ordering milestone plus basic production/expense milestone. No React frontend, AI,
+M-Pesa, refunds, partial cash payments, rider reassignment, record correction workflow, live handset
+receipt tracking, multi-seller carts or accounting valuation. Configure HTTPS, edge login rate limits,
+backups and operational monitoring before public deployment. The local Compose database is bound to
+loopback; its password must be supplied. Tokens expire after 8 hours; there is no refresh/revocation UI.
+
+Money and quantity fields are returned as decimal strings to avoid JSON floating point rounding.
+Runtime dependencies are pinned in `requirements.lock`; regenerate with
+`uv pip compile pyproject.toml -o requirements.lock` when updating dependencies.
+If host ports are occupied, set `API_PORT` / `POSTGRES_PORT` in `.env` and match the host
+`DATABASE_URL`. If the local Compose build plugin crashes, use `COMPOSE_BAKE=false docker compose up --build -d`.
+
+Development verification created local demo records. If `DEMO_ADMIN_PHONE` and
+`DEMO_ADMIN_PASSWORD` exist in your ignored `.env`, they are the generated local demo login.
+They are not part of app configuration and are never shipped in Git or the container image.

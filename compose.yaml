@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: farm
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: farm
-    ports: ["127.0.0.1:5432:5432"]
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U farm"]
@@ -24,7 +24,7 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://farm:${POSTGRES_PASSWORD}@db:5432/farm
-    ports: ["127.0.0.1:8000:8000"]
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
     depends_on:
       migrate: {condition: service_completed_successfully}
   worker:

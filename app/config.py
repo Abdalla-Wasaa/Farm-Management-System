@@ -1,7 +1,9 @@
 from decimal import Decimal
 from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -15,5 +17,6 @@ class Settings(BaseSettings):
     at_username: str = "sandbox"
     at_api_key: str = ""
     at_sender_id: str = ""
+
 
 settings = Settings()
