@@ -4,7 +4,16 @@ os.environ.setdefault("JWT_SECRET", "test-secret-at-least-32-characters-long")
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg://farm:farm@localhost:5432/farm_test"
 )
-os.environ.setdefault("DARAJA_MODE", "disabled")
+os.environ["DARAJA_MODE"] = "disabled"
+# Never inherit live SMS credentials or recipient restrictions from a developer's .env.
+for key, value in {
+    "SMS_MODE": "dry-run",
+    "AT_USERNAME": "sandbox",
+    "AT_API_KEY": "",
+    "AT_SENDER_ID": "",
+    "SMS_ALLOWED_RECIPIENTS": "[]",
+}.items():
+    os.environ[key] = value
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text

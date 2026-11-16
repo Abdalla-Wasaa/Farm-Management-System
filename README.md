@@ -319,7 +319,7 @@ above, use a number you control, place an unpaid order, and explicitly request a
 payment. Do not run this step unattended. No real STK request or live SMS is sent by the
 frontend build, backend tests, browser tests, or account seed scripts.
 
-Local verification passed 46 backend tests and 8 Playwright scenarios. The frontend production
+Local verification passed 50 backend tests and 8 Playwright scenarios. The frontend production
 build also passed TypeScript checking and was checked for configured backend/provider secrets.
 The frontend Docker image also built successfully after a transient Docker Hub DNS issue
 cleared. The nginx frontend now serves port 5173, including direct links to application routes.
@@ -348,3 +348,53 @@ Ngrok is a separate process. Keep `ngrok http 8001` running for public callbacks
 application does not itself request an STK prompt; a buyer must explicitly submit the payment form.
 The worker processes requests that a buyer has already queued. SMS remains dry-run unless you
 explicitly configure live Africa's Talking credentials and mode.
+
+
+### Testing live Africa's Talking SMS with a small balance
+
+Keep API keys only in the backend `.env`. The key and username must belong to a **live**
+Africa's Talking application, not Sandbox. Use an approved sender ID (or a sending identity
+Africa's Talking confirms is available for your account). Credit alone does not establish
+that your account is authorized to use a particular sender name.
+
+Start with normal application SMS still in dry-run:
+
+```dotenv
+SMS_MODE=dry-run
+AT_USERNAME=YOUR_LIVE_APP_USERNAME
+AT_API_KEY=YOUR_LIVE_API_KEY
+AT_SENDER_ID=YOUR_APPROVED_SENDER_ID
+SMS_TEST_PHONE=YOUR_OWN_KENYAN_NUMBER
+SMS_ALLOWED_RECIPIENTS=["YOUR_OWN_NUMBER_IN_PLUS254_FORMAT"]
+```
+
+`SMS_TEST_PHONE` is a convenience for the test CLI; the optional allowlist restricts real
+submissions to the specified numbers. When empty, the allowlist does not restrict recipients.
+A notification outside a nonempty list becomes `blocked`, without a provider call or retry.
+Blocked and previous dry-run messages are never automatically replayed.
+
+To send exactly one connectivity message, explicitly run:
+
+```sh
+python -m app.sms_test --reference sms-connectivity-001 --live
+```
+
+Without `--live` the command is a dry run. This command does **not** run the payment worker,
+drain the notification outbox, or change the API/worker's configured SMS mode. It persists
+one notification and its sanitized attempt result. Reuse the same reference after an
+interruption; a processed reference does not send again. If its outcome is `uncertain`,
+check Africa's Talking's dashboard before starting a new test. Test messages are short
+ASCII text and have no automatic retries; account/network tariffs still determine the charge.
+Provider acceptance does not prove handset delivery—confirm that the SMS arrived.
+
+After a successful test, set `SMS_MODE=live` in `.env` and recreate `api` and `worker`:
+
+```sh
+docker compose up -d --force-recreate api worker
+```
+
+Leave the test allowlist in place while testing order and verified-payment notifications.
+Use a buyer account with that allowed phone. Other recipients (such as test sellers/riders)
+will be blocked. Remove the restriction only when intentionally enabling notifications to
+all customers. Live SMS can be used alongside sandbox Daraja; payment texts explicitly
+label sandbox success as a simulation, never as real money received.

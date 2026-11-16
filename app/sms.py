@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import settings
+from app.schemas import phone_number
 
 
 @dataclass
@@ -16,6 +17,12 @@ class Result:
 def send(phone, message):
     if settings.sms_mode == "dry-run":
         return Result("dry-run", {"mode": "dry-run"})
+    try:
+        phone = phone_number(phone)
+    except ValueError:
+        return Result("permanent", {"error": "invalid_recipient"})
+    if settings.sms_allowed_recipients and phone not in settings.sms_allowed_recipients:
+        return Result("blocked", {"error": "recipient_not_allowlisted"})
     if not settings.at_api_key or (
         settings.sms_mode == "live" and settings.at_username == "sandbox"
     ):

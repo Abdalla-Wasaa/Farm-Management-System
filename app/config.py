@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     at_username: str = "sandbox"
     at_api_key: str = ""
     at_sender_id: str = ""
+    sms_allowed_recipients: list[str] = []
+
+    @field_validator("sms_allowed_recipients")
+    @classmethod
+    def normalize_sms_recipients(cls, values):
+        from app.schemas import phone_number
+
+        return list(dict.fromkeys(phone_number(value) for value in values))
 
     daraja_mode: Literal["disabled", "sandbox"] = "disabled"
     daraja_consumer_key: SecretStr = SecretStr("")

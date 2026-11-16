@@ -35,7 +35,7 @@ def process_one(db, sender=None):
             provider_response=result.response,
         )
     )
-    if result.outcome in ("accepted", "dry-run"):
+    if result.outcome in ("accepted", "dry-run", "blocked"):
         notification.status = result.outcome
     elif result.outcome == "permanent" or notification.attempts >= MAX_ATTEMPTS:
         notification.status = "failed"
