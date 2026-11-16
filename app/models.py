@@ -142,7 +142,9 @@ class Payment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     __table_args__ = (
-        CheckConstraint("amount > 0 AND method = 'cash'", name="ck_cash_payment"),
+        CheckConstraint(
+            "amount > 0 AND method in ('cash','mpesa_sandbox')", name="ck_cash_payment"
+        ),
     )
 
 
@@ -251,4 +253,30 @@ class Expense(Base):
     __table_args__ = (
         UniqueConstraint("business_id", "source"),
         CheckConstraint("amount > 0"),
+    )
+
+
+class MpesaIntent(Base):
+    __tablename__ = "mpesa_intents"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"))
+    buyer_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+    phone: Mapped[str] = mapped_column(String(13))
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    checkout_id: Mapped[str | None] = mapped_column(String(80), unique=True)
+    merchant_id: Mapped[str | None] = mapped_column(String(80))
+    result_code: Mapped[str | None] = mapped_column(String(30))
+    checks: Mapped[int] = mapped_column(default=0)
+    next_check: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (
+        UniqueConstraint("order_id", "idempotency_key"),
+        CheckConstraint(
+            "status in ('queued','submitting','pending','uncertain','failed','succeeded')",
+            name="ck_mpesa_intent_status",
+        ),
+        CheckConstraint("amount > 0", name="ck_mpesa_intent_amount"),
+        Index("ix_mpesa_intents_queue", "status", "next_check"),
     )

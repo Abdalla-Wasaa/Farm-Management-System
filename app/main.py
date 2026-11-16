@@ -377,3 +377,52 @@ def business_summary(business_id: int, start: date, end: date, db: DB, actor: Ac
     return jsonable_encoder(
         farm.summary(db, actor, business_id, start, end), custom_encoder={Decimal: str}
     )
+
+
+@app.post("/orders/{order_id}/payments/mpesa", status_code=202)
+def mpesa_payment(
+    order_id: int,
+    data: s.MpesaIn,
+    db: DB,
+    actor: Actor,
+    idempotency_key: Annotated[str, Header(min_length=1, max_length=100)],
+):
+    from app.payments import request_stk
+
+    intent = request_stk(db, actor, order_id, data, idempotency_key)
+    return {
+        "id": intent.id,
+        "status": intent.status,
+        "environment": "sandbox",
+        "amount": str(intent.amount),
+    }
+
+
+@app.get("/orders/{order_id}/payments/mpesa")
+def mpesa_status(order_id: int, db: DB, actor: Actor):
+    from app.models import MpesaIntent
+
+    svc.view_order(db, actor, order_id)
+    return [
+        {
+            "id": i.id,
+            "status": i.status,
+            "amount": str(i.amount),
+            "environment": "sandbox",
+            "checkout_id": i.checkout_id,
+            "result_code": i.result_code,
+            "checks": i.checks,
+        }
+        for i in db.scalars(
+            select(MpesaIntent)
+            .where(MpesaIntent.order_id == order_id)
+            .order_by(MpesaIntent.id)
+        )
+    ]
+
+
+@app.post("/payments/mpesa/callback")
+def mpesa_callback(data: s.MpesaCallback, db: DB):
+    from app.payments import callback_hint
+
+    return callback_hint(db, data)

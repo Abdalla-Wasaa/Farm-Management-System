@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from app import sms
+from app import payments, sms
 from app.db import SessionLocal
 from app.models import Notification, NotificationAttempt, now
 from app.services import expire_orders
@@ -47,6 +47,7 @@ def process_one(db, sender=None):
 
 
 def tick():
+    payments.tick()
     with SessionLocal.begin() as db:
         expire_orders(db)
     for _ in range(100):

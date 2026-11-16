@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     at_username: str = "sandbox"
     at_api_key: str = ""
     at_sender_id: str = ""
+
+    daraja_mode: Literal["disabled", "sandbox"] = "disabled"
+    daraja_consumer_key: SecretStr = SecretStr("")
+    daraja_consumer_secret: SecretStr = SecretStr("")
+    daraja_passkey: SecretStr = SecretStr("")
+    daraja_shortcode: str = "174379"
+    daraja_callback_url: str = ""
 
 
 settings = Settings()

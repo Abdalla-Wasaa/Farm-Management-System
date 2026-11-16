@@ -4,6 +4,7 @@ os.environ.setdefault("JWT_SECRET", "test-secret-at-least-32-characters-long")
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg://farm:farm@localhost:5432/farm_test"
 )
+os.environ.setdefault("DARAJA_MODE", "disabled")
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -23,7 +24,7 @@ def setup_db():
     with engine.begin() as conn:
         conn.execute(
             text(
-                "TRUNCATE users, businesses, products, orders, order_items, inventory_movements, payments, audit_events, notifications, notification_attempts, business_members, flocks, daily_records, production_transfers, expenses RESTART IDENTITY CASCADE"
+                "TRUNCATE users, businesses, products, orders, order_items, inventory_movements, payments, audit_events, notifications, notification_attempts, business_members, flocks, daily_records, production_transfers, expenses, mpesa_intents RESTART IDENTITY CASCADE"
             )
         )
     with SessionLocal.begin() as db:

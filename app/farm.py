@@ -207,6 +207,7 @@ def summary(db, actor, business_id, start, end):
         .join(Order)
         .where(
             Order.business_id == business_id,
+            Payment.method == "cash",
             Payment.created_at >= lower,
             Payment.created_at < upper,
         )

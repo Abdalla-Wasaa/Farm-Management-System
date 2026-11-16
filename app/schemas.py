@@ -143,3 +143,21 @@ class ExpenseIn(Input):
     description: str = Field(default="", max_length=500)
     amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
     source: str = Field(min_length=1, max_length=100)
+
+
+class MpesaIn(Input):
+    phone: str
+    _phone = field_validator("phone")(phone_number)
+
+
+class StkCallback(BaseModel):
+    CheckoutRequestID: str = Field(min_length=1, max_length=80)
+    MerchantRequestID: str = Field(min_length=1, max_length=80)
+
+
+class CallbackBody(BaseModel):
+    stkCallback: StkCallback
+
+
+class MpesaCallback(BaseModel):
+    Body: CallbackBody

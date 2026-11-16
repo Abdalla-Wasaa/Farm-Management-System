@@ -15,6 +15,7 @@ from app.models import (
     Business,
     BusinessMember,
     Movement,
+    MpesaIntent,
     Notification,
     Order,
     OrderItem,
@@ -319,7 +320,7 @@ def progress_delivery(db, actor, order_id, target):
 
 
 def record_payment(db, actor, order_id, data):
-    """Cash receipt boundary; future verified provider callbacks use a separate adapter."""
+    """Cash receipt action; sandbox Daraja payments use app.payments."""
     order = get_or_404(db, Order, order_id, lock=True)
     if actor.role == "rider":
         if order.rider_id != actor.id or order.delivery_status != "delivered":
@@ -331,6 +332,15 @@ def record_payment(db, actor, order_id, data):
         if previous.receipt == data.receipt and previous.amount == data.amount:
             return previous
         raise HTTPException(409, "Payment already recorded")
+    if db.scalar(
+        select(MpesaIntent.id).where(
+            MpesaIntent.order_id == order.id,
+            MpesaIntent.status.in_(["queued", "submitting", "pending", "uncertain"]),
+        )
+    ):
+        raise HTTPException(
+            409, "Resolve the active M-Pesa request before recording cash"
+        )
     if order.status != "completed" or data.amount != order.total:
         raise HTTPException(
             409, "Record exact cash total after pickup or delivery completion"
