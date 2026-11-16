@@ -208,6 +208,15 @@ def cancel(db, order, actor, expired=False):
         raise HTTPException(
             409, "Paid orders require a refund workflow before cancellation"
         )
+    if db.scalar(
+        select(MpesaIntent.id).where(
+            MpesaIntent.order_id == order.id,
+            MpesaIntent.status.in_(["queued", "submitting", "pending", "uncertain"]),
+        )
+    ):
+        raise HTTPException(
+            409, "Resolve the active M-Pesa request before cancelling this order"
+        )
     stock_for_order(db, order, actor, release=True)
     order.status = "expired" if expired else "cancelled"
     if order.fulfillment == "delivery":
@@ -245,7 +254,11 @@ def transition(db, actor, order_id, target):
         stock_for_order(db, order, actor, release=False)
     elif transitions.get(order.status) != target:
         raise HTTPException(409, "Invalid order transition")
-    if order.status == "pending" and order.expires_at <= now():
+    if (
+        order.status == "pending"
+        and order.expires_at <= now()
+        and order.payment_status != "paid"
+    ):
         raise HTTPException(409, "Reservation expired")
     order.status = target
     audit(db, order, actor, target)
@@ -377,10 +390,25 @@ def view_order(db, actor, order_id):
 def expire_orders(db):
     orders = db.scalars(
         select(Order)
-        .where(Order.status == "pending", Order.expires_at <= now())
+        .where(
+            Order.status == "pending",
+            Order.payment_status == "unpaid",
+            Order.expires_at <= now(),
+        )
         .order_by(Order.id)
         .with_for_update(skip_locked=True)
     ).all()
+    count = 0
     for order in orders:
+        if db.scalar(
+            select(MpesaIntent.id).where(
+                MpesaIntent.order_id == order.id,
+                MpesaIntent.status.in_(
+                    ["queued", "submitting", "pending", "uncertain"]
+                ),
+            )
+        ):
+            continue
         cancel(db, order, None, expired=True)
-    return len(orders)
+        count += 1
+    return count

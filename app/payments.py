@@ -33,11 +33,14 @@ def request_stk(db, actor, order_id, data, key):
             raise HTTPException(409, "Idempotency key reused with a different phone")
         return previous
     daraja.configured()
-    # This milestone accepts payment at handover, like existing cash receipts.
-    if order.status != "completed" or order.payment_status != "unpaid":
-        raise HTTPException(
-            409, "Pay an unpaid order after pickup or delivery completion"
-        )
+    if (
+        order.status
+        not in ("pending", "confirmed", "preparing", "ready", "dispatched", "completed")
+        or order.payment_status != "unpaid"
+    ):
+        raise HTTPException(409, "Only open, unpaid orders can request M-Pesa payment")
+    if order.status == "pending" and order.expires_at <= now():
+        raise HTTPException(409, "Reservation expired; place a new order before paying")
     if order.total != order.total.to_integral_value():
         raise HTTPException(
             422, "STK Push requires a whole KES total; no rounding is applied"
@@ -175,7 +178,11 @@ def reconcile_one(query=None):
         # Both identifiers must match our authenticated initiation response.
         if matches and code == "0":
             existing = db.scalar(select(Payment).where(Payment.order_id == order.id))
-            if existing or order.total != intent.amount or order.status != "completed":
+            if (
+                existing
+                or order.total != intent.amount
+                or order.status in ("cancelled", "expired")
+            ):
                 intent.status = "uncertain"
                 return True
             db.add(

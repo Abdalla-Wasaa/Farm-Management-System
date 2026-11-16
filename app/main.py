@@ -447,7 +447,7 @@ def marketplace_config():
         "tray_size": 30,
         "mpesa_mode": settings.daraja_mode,
         "mpesa_ready": ready,
-        "mpesa_timing": "after_completion",
+        "mpesa_timing": "after_order_creation",
     }
 
 

@@ -16,7 +16,7 @@ from app.models import MpesaIntent, Notification, Order, Payment, now
 
 
 @pytest.fixture()
-def mpesa_shop(shop, monkeypatch):
+def mpesa_config(monkeypatch):
     monkeypatch.setattr(settings, "daraja_mode", "sandbox")
     monkeypatch.setattr(settings, "daraja_consumer_key", SecretStr("dummy-key"))
     monkeypatch.setattr(settings, "daraja_consumer_secret", SecretStr("dummy-secret"))
@@ -26,6 +26,10 @@ def mpesa_shop(shop, monkeypatch):
         "daraja_callback_url",
         "https://callback.example/payments/mpesa/callback",
     )
+
+
+@pytest.fixture()
+def mpesa_shop(shop, mpesa_config):
     c, u = shop
     oid = place(c, u, fulfillment="pickup").json()["id"]
     for status in ["confirmed", "preparing", "ready", "completed"]:
@@ -129,7 +133,7 @@ def test_permissions_configuration_and_whole_amount(mpesa_shop, monkeypatch):
     assert request(c, u, oid).status_code == 422
     with SessionLocal.begin() as db:
         db.get(Order, oid).total = Decimal("900.00")
-        db.get(Order, oid).status = "ready"
+        db.get(Order, oid).status = "cancelled"
     assert request(c, u, oid).status_code == 409
     assert (
         c.get(
@@ -258,3 +262,118 @@ def test_transport_failure_is_sanitized(mpesa_shop, monkeypatch):
     with pytest.raises(daraja.ProviderError) as exc:
         daraja.query(SimpleNamespace(checkout_id="test"))
     assert "must not log" not in str(exc.value) and "dummy-secret" not in str(exc.value)
+
+
+def test_prepayment_holds_stock_through_verification_and_handover(shop, mpesa_config):
+    from app.models import Product
+    from app.services import expire_orders
+
+    c, u = shop
+    oid = place(c, u, fulfillment="pickup").json()["id"]
+    assert request(c, u, oid).status_code == 202
+    assert (
+        c.post(
+            f"/orders/{oid}/status",
+            headers=u["buyer2"]["headers"],
+            json={"status": "cancelled"},
+        ).status_code
+        == 409
+    )
+    with SessionLocal.begin() as db:
+        db.get(Order, oid).expires_at = now() - timedelta(minutes=1)
+    with SessionLocal.begin() as db:
+        assert expire_orders(db) == 0
+        assert db.get(Product, u["product_id"]).reserved == 2
+    assert payments.submit_one(accepted)
+    due()
+    assert payments.reconcile_one(lambda i: result())
+    with SessionLocal.begin() as db:
+        assert expire_orders(db) == 0
+        order = db.get(Order, oid)
+        assert order.status == "pending" and order.payment_status == "paid"
+        product = db.get(Product, u["product_id"])
+        assert product.stock == 10 and product.reserved == 2
+    assert (
+        c.post(
+            f"/orders/{oid}/status",
+            headers=u["buyer2"]["headers"],
+            json={"status": "cancelled"},
+        ).status_code
+        == 409
+    )
+    for status in ["confirmed", "preparing", "ready", "completed"]:
+        assert advance(c, u, oid, status).status_code == 200
+    with SessionLocal() as db:
+        product = db.get(Product, u["product_id"])
+        assert product.stock == 8 and product.reserved == 0
+        assert db.scalar(select(func.count()).select_from(Payment)) == 1
+
+
+def test_failed_prepayment_releases_stock_on_expiry(shop, mpesa_config):
+    from app.models import Product
+    from app.services import expire_orders
+
+    c, u = shop
+    oid = place(c, u, fulfillment="pickup").json()["id"]
+    assert request(c, u, oid).status_code == 202
+    assert payments.submit_one(accepted)
+    due()
+    assert payments.reconcile_one(lambda i: result(1032))
+    with SessionLocal.begin() as db:
+        db.get(Order, oid).expires_at = now() - timedelta(seconds=1)
+    with SessionLocal.begin() as db:
+        assert expire_orders(db) == 1
+    with SessionLocal() as db:
+        assert db.get(Product, u["product_id"]).reserved == 0
+        assert db.get(Order, oid).status == "expired"
+        assert db.scalar(select(func.count()).select_from(Payment)) == 0
+    assert request(c, u, oid, key="closed-order").status_code == 409
+
+
+def test_expired_unpaid_order_cannot_start_stk(shop, mpesa_config):
+    c, u = shop
+    oid = place(c, u, fulfillment="pickup").json()["id"]
+    with SessionLocal.begin() as db:
+        db.get(Order, oid).expires_at = now() - timedelta(seconds=1)
+    assert request(c, u, oid).status_code == 409
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(MpesaIntent)) == 0
+
+
+def test_payment_start_and_cancellation_are_serialized(shop, mpesa_config):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from fastapi import HTTPException
+
+    from app.models import Product, User
+    from app.schemas import MpesaIn
+    from app.services import transition
+
+    c, u = shop
+    oid = place(c, u, fulfillment="pickup").json()["id"]
+
+    def action(kind):
+        try:
+            with SessionLocal.begin() as db:
+                actor = db.get(User, u["buyer2"]["id"])
+                if kind == "pay":
+                    payments.request_stk(
+                        db, actor, oid, MpesaIn(phone="0712345678"), "race"
+                    )
+                else:
+                    transition(db, actor, oid, "cancelled")
+            return 200
+        except HTTPException as exc:
+            return exc.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(action, ["pay", "cancel"]))
+    assert sorted(results) == [200, 409]
+    with SessionLocal() as db:
+        order = db.get(Order, oid)
+        intent = db.scalar(select(MpesaIntent))
+        product = db.get(Product, u["product_id"])
+        if order.status == "cancelled":
+            assert intent is None and product.reserved == 0
+        else:
+            assert intent.status == "queued" and product.reserved == 2
