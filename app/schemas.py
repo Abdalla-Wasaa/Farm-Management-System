@@ -161,3 +161,8 @@ class CallbackBody(BaseModel):
 
 class MpesaCallback(BaseModel):
     Body: CallbackBody
+
+
+class AdjustmentIn(Input):
+    quantity: Decimal = Field(max_digits=12, decimal_places=3)
+    source: str = Field(min_length=1, max_length=100)

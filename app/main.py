@@ -39,7 +39,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
 )
 DB = Annotated[Session, Depends(get_db, scope="function")]
@@ -76,6 +76,10 @@ def order_view(db, order):
         row(i)
         for i in db.scalars(select(OrderItem).where(OrderItem.order_id == order.id))
     ]
+    business = db.get(Business, order.business_id)
+    data["business_name"] = business.name
+    data["seller_phone"] = db.get(User, business.owner_id).phone
+    data["buyer_phone"] = db.get(User, order.buyer_id).phone
     data["payments"] = [
         row(p) for p in db.scalars(select(Payment).where(Payment.order_id == order.id))
     ]
@@ -426,3 +430,56 @@ def mpesa_callback(data: s.MpesaCallback, db: DB):
     from app.payments import callback_hint
 
     return callback_hint(db, data)
+
+
+@app.get("/marketplace/config")
+def marketplace_config():
+    return {
+        "currency": "KES",
+        "delivery_fee": str(settings.delivery_fee),
+        "tray_size": 30,
+        "mpesa_mode": settings.daraja_mode,
+        "mpesa_ready": settings.daraja_mode == "sandbox"
+        and bool(settings.daraja_callback_url),
+        "mpesa_timing": "after_completion",
+    }
+
+
+@app.get("/businesses/managed/list")
+def managed_businesses(db: DB, actor: Actor):
+    require(actor, "admin", "seller", "staff")
+    query = select(Business)
+    if actor.role != "admin":
+        query = query.where(
+            or_(
+                Business.owner_id == actor.id,
+                Business.id.in_(
+                    select(BusinessMember.business_id).where(
+                        BusinessMember.user_id == actor.id
+                    )
+                ),
+            )
+        )
+    return [row(b) for b in db.scalars(query.order_by(Business.id))]
+
+
+@app.get("/admin/users")
+def list_users(db: DB, actor: Actor, role: str | None = None):
+    require(actor, "admin")
+    query = select(User)
+    if role:
+        query = query.where(User.role == role)
+    return [
+        {"id": u.id, "phone": u.phone, "role": u.role}
+        for u in db.scalars(query.order_by(User.id).limit(500))
+    ]
+
+
+@app.patch("/products/{product_id}")
+def update_product(product_id: int, data: s.ProductIn, db: DB, actor: Actor):
+    return product_view(catalog.update_product(db, actor, product_id, data))
+
+
+@app.post("/products/{product_id}/adjustments")
+def adjust_product(product_id: int, data: s.AdjustmentIn, db: DB, actor: Actor):
+    return product_view(catalog.adjust_stock(db, actor, product_id, data))
