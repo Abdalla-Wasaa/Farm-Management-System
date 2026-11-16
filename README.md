@@ -1,4 +1,4 @@
-# Poultry farm and marketplace backend
+# Kuku Farm · Poultry farm & marketplace
 
 FastAPI modular monolith for Kenya; PostgreSQL is required. OpenAPI: `/docs`.
 
@@ -111,7 +111,7 @@ Cash less expenses is not accrual profit; no invented feed/egg/bird unit convers
 
 ## Scope and remaining work
 
-Implemented: ordering milestone plus basic production/expense milestone. No React frontend, AI,
+Implemented: connected React frontend, ordering and basic production/expense milestones. No AI,
 live M-Pesa, refunds, partial cash payments, rider reassignment, record correction workflow, live handset
 receipt tracking, multi-seller carts or accounting valuation. Configure HTTPS, edge login rate limits,
 backups and operational monitoring before public deployment. The local Compose database is bound to
@@ -183,3 +183,138 @@ then require investigation. Automated reconciliation of ambiguous submissions, m
 refunds, prepayment, real receipt reconciliation, and live onboarding are not implemented.
 
 Protocol reference: https://github.com/safaricom/mpesa-php-sdk/blob/master/src/Mpesa.php
+
+## React frontend
+
+The responsive React/TypeScript app lives in `frontend/`. It uses Vite, Tailwind CSS,
+React Router, TanStack Query, React Hook Form and Zod. All application data comes from
+FastAPI; no sample records are embedded in the UI.
+
+Development (Node 22+):
+
+```sh
+cd frontend
+npm ci
+cp .env.example .env.local
+# VITE_API_BASE_URL=http://localhost:8001
+npm run dev
+```
+
+Open http://localhost:5173. The existing API runs on http://localhost:8001; CORS explicitly
+allows `http://localhost:5173` and `http://127.0.0.1:5173`. Add a different local origin to
+backend `CORS_ORIGINS` if you change the frontend port, then restart the API. Only
+`VITE_API_BASE_URL` belongs in frontend environment files. Never put provider keys, JWT
+signing keys or account passwords in a `VITE_` variable: these are public build values.
+
+`npm run build` runs TypeScript checks and creates `frontend/dist/`; `npm run preview`
+serves that build locally. BrowserRouter hosting must serve `index.html` for application
+routes. The provided nginx configuration handles this in Docker.
+
+For the complete persistent local stack (requires Docker Hub access):
+
+```sh
+docker compose --profile frontend up --build -d
+```
+
+The frontend is served on port 5173 (`FRONTEND_PORT`), with the API URL compiled from
+`FRONTEND_API_URL` (default `http://localhost:8001`). Set it to match your API host port.
+Changing the API URL requires rebuilding the frontend image. Keep CORS aligned with the
+frontend origin. This is local hosting; no public deployment is configured.
+
+Authentication uses the existing Bearer JWT. The browser stores it in per-tab
+`sessionStorage`, not a compiled credential or URL. Logout clears the token and cached
+private data. Expired tokens return the user to sign-in. Routes and navigation follow
+roles, and the API independently enforces permissions. There is no password-reset,
+refresh-token or account-phone editing endpoint, so the UI does not pretend to offer them.
+
+### Role-by-role walkthrough
+
+1. **Administrator:** use the existing hidden-password `create-admin` command. Log in at
+   `/login`. Under **People & SMS**, create seller/staff/rider accounts and grant seller or
+   staff access to the selected farm. Share generated passwords outside Git. The bootstrap
+   administrator's farm already exists; no privileged self-registration is available.
+2. **Seller/staff:** choose the active farm, open **Produce & inventory**, create eggs,
+   broilers, dressed chicken or spent layers, and add purchased/opening stock. Use unique
+   receipt references. Product names, descriptions and prices can be edited. Units/categories are fixed once inventory movements exist. Signed stock
+   adjustments cannot remove reserved stock. Farm output should use production transfers.
+3. **Buyer:** register with a Kenyan mobile number and password, browse **Marketplace**,
+   open a product and add a selling quantity. A basket accepts only one seller. Choose
+   pickup or delivery, enter the delivery address, and review KES totals. Order updates use
+   the buyer's registered phone; checkout does not submit an unsupported contact-number field.
+4. **Buyer checkout:** place the order once. Buttons disable during submission. If the
+   response is lost, use **Recover saved submission** or inspect order history. Recovery
+   reuses the saved body and idempotency key, even when the original order already reserved
+   the available stock. It does not create a fresh request. Cancellation requires confirmation.
+5. **Seller:** under **Orders**, confirm → prepare → ready. For pickup, confirm actual
+   collection using **Complete pickup**. Existing order-item descriptions and prices stay fixed.
+6. **Administrator:** assign a rider to a confirmed/preparing/ready delivery order.
+7. **Rider:** **My deliveries** shows assigned jobs. Open the order to see the farm contact,
+   buyer phone and delivery address. The backend has no exact pickup-location field, so the
+   UI explicitly asks the rider/buyer to coordinate that point with the farm contact. Confirm
+   pickup/dispatch, then confirm delivery. Other riders cannot change this order.
+8. **Cash:** after completion, the authorized seller/admin or assigned delivery rider can
+   record physically received cash using a unique receipt reference. The buyer then sees
+   the completed order, delivered status and paid status. Active/unresolved M-Pesa intents
+   block cash recording to prevent a second collection.
+9. **M-Pesa sandbox:** the action is shown only for a completed unpaid order when the server
+   reports sandbox callback configuration ready. An accepted request stays unpaid until the
+   worker independently verifies it. UI polling stops after two minutes and on navigation;
+   **Refresh status** checks again without creating another prompt. A confirmed cancellation
+   or failure permits a new request; an uncertain outcome requires administrator investigation.
+   Sandbox payments are labelled simulations. No live mode is supported.
+10. **Farm staff:** create a broiler/layer batch, then record daily mortality, eggs and feed.
+    Recording production does not add marketplace stock. Under **Transfer to inventory**,
+    select a product, production record for eggs (30 eggs per tray), or birds removed for
+    harvest. Reuse a source reference after failure. Then verify inventory balances/movements.
+    Add dated expenses and use **Reports** for the real production/sales/cash summaries.
+
+Admin SMS screens show only notification states supported by the backend. `dry-run` means
+no SMS was sent; `accepted` means submitted to the provider, not delivered to a handset.
+Africa's Talking stays in dry-run during development.
+
+### Browser tests and generated local accounts
+
+Playwright uses a dedicated PostgreSQL database, a separate FastAPI process on port 8012,
+and Vite on port 5174. It never resets your regular farm database. The seed script refuses
+any database whose name does not end `_e2e_test`, but **does truncate that dedicated test
+DB at the start of each run**. Do not point it at valuable data.
+
+```sh
+# On the local PostgreSQL container used for tests in this workspace:
+docker exec farm-dev-postgres createdb -U farm farm_frontend_e2e_test
+# Or create an equivalent dedicated database with your PostgreSQL tools.
+cd frontend
+npm ci
+npx playwright install chromium
+E2E_DATABASE_URL=postgresql+psycopg://farm:YOUR_PASSWORD@localhost:5432/farm_frontend_e2e_test npm run test:e2e
+```
+
+Omit `E2E_DATABASE_URL` only when the default local `farm:farm` test credentials apply.
+Ports 8012 and 5174 must be free; test servers are never reused silently. Backend pytest
+continues to use its separate `_test` database as described above.
+
+Each run generates account passwords into the ignored, mode-0600
+`.local/e2e-accounts.json`. No passwords are committed. For manual isolated testing, launch
+`scripts/e2e_server.py` with the same test database URL and point Vite's API base URL at
+`http://127.0.0.1:8012` (serve Vite on port 5174). The server seeds all privileged accounts
+and an alternate buyer; the primary buyer is registered by the browser test. No worker is
+started, and fake Daraja configuration is used only in this isolated process.
+
+Tests cover registration/login, catalogue/stock setup, checkout, seller preparation, rider
+assignment, dispatch/delivery, cash receipt, final buyer status, role/session restrictions,
+production transfer, expenses/reports, and lost-response idempotency/cancellation. Payment
+UI tests use the real API and payment services with **fake provider functions**, not real
+STK prompts. They cover pending, success, payer cancellation, retry and uncertain timeout.
+They are not evidence of real callback connectivity. Traces/screenshots are ignored local
+artifacts and can contain generated test account details.
+
+For an actual manual Daraja test, separately configure the public HTTPS callback as described
+above, use a number you control, complete an unpaid order, and explicitly request a sandbox
+payment. Do not run this step unattended. No real STK request or live SMS is sent by the
+frontend build, backend tests, browser tests, or account seed scripts.
+
+Local verification passed 42 backend tests and 7 Playwright scenarios. The frontend production
+build also passed TypeScript checking and was checked for configured backend/provider secrets.
+The optional frontend Docker image could not be fetched here because Docker Hub DNS resolution
+failed; use `npm run dev` or `npm run build && npm run preview -- --port 5173` while that network
+issue remains. Existing backend containers continue running on port 8001.

@@ -434,13 +434,19 @@ def mpesa_callback(data: s.MpesaCallback, db: DB):
 
 @app.get("/marketplace/config")
 def marketplace_config():
+    from app.daraja import configured
+
+    ready = True
+    try:
+        configured()
+    except HTTPException:
+        ready = False
     return {
         "currency": "KES",
         "delivery_fee": str(settings.delivery_fee),
         "tray_size": 30,
         "mpesa_mode": settings.daraja_mode,
-        "mpesa_ready": settings.daraja_mode == "sandbox"
-        and bool(settings.daraja_callback_url),
+        "mpesa_ready": ready,
         "mpesa_timing": "after_completion",
     }
 

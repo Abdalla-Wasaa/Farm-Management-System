@@ -52,6 +52,25 @@ def test_product_edit_adjustment_and_scoping(shop):
         )
     assert Decimal(c.get(f"/products/{pid}").json()["stock"]) == 9
     assert (
+        c.patch(
+            f"/products/{pid}",
+            headers=u["seller"]["headers"],
+            json={**body, "unit": "egg"},
+        ).status_code
+        == 409
+    )
+    cors = c.options(
+        f"/products/{pid}",
+        headers={
+            "Origin": "http://127.0.0.1:5173",
+            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": "Authorization,Content-Type",
+        },
+    )
+    assert cors.status_code == 200
+    assert cors.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+    assert (
         c.post(
             f"/products/{pid}/adjustments",
             headers=u["seller"]["headers"],

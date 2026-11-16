@@ -36,6 +36,18 @@ def update_product(db, actor, product_id, data):
     manages(db, actor, product.business_id)
     if data.business_id != product.business_id:
         raise HTTPException(422, "Products cannot be moved between businesses")
+    if data.unit != product.unit or data.category != product.category:
+        from sqlalchemy import select
+
+        from app.models import Movement
+
+        if db.scalar(
+            select(Movement.id).where(Movement.product_id == product.id).limit(1)
+        ):
+            raise HTTPException(
+                409,
+                "Create a new product to change its unit or category after inventory movements",
+            )
     for key, value in data.model_dump().items():
         setattr(product, key, value)
     db.flush()
