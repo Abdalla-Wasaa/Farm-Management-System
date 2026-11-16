@@ -5,3 +5,13 @@ __pycache__/
 *.egg-info/
 *.db
 .ruff_cache/
+
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
+frontend/playwright-report/
+frontend/test-results/
+.local/
+
+*.tsbuildinfo
